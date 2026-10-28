@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Voice Changer Realtime</title>
+<style>
+:root{--bg:#f4f5f9;--card:#fff;--text:#161a2b;--muted:#6a7088;--accent:#6c4cff;--accent2:#ff4c8b;--line:#e3e5ee;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1120;--card:#1a1d33;--text:#eef0fb;--muted:#9aa0bd;--line:#2b2f4d;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1120;--card:#1a1d33;--text:#eef0fb;--muted:#9aa0bd;--line:#2b2f4d;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100%}
+main{max-width:480px;margin:0 auto;padding:20px 16px 32px}
+h1{font-size:1.3rem;margin:4px 0 2px}
+.sub{color:var(--muted);font-size:.85rem;margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px}
+#power{width:100%;border:0;border-radius:16px;padding:18px;font-size:1.1rem;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2));cursor:pointer}
+#power.on{background:#e5484d}
+#status{color:var(--muted);font-size:.82rem;margin:10px 2px 0;min-height:1.2em}
+.meter{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:12px}
+#bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .06s}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.p{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:14px;padding:14px 8px;font-size:.95rem;cursor:pointer}
+.p.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);font-weight:700}
+label{display:flex;justify-content:space-between;font-size:.88rem;margin-bottom:6px}
+label span{color:var(--muted)}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0 0 14px}
+.tip{font-size:.78rem;color:var(--muted);line-height:1.5}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙️ Voice Changer Realtime</h1>
+  <p class="sub">Ubah suaramu langsung lewat mikrofon HP.</p>
+
+  <div class="card">
+    <button id="power">▶ Mulai</button>
+    <div class="meter"><div id="bar"></div></div>
+    <div id="status">Pasang earphone dulu agar tidak bergema.</div>
+  </div>
+
+  <div class="card">
+    <label>Preset</label>
+    <div class="grid" id="presets"></div>
+  </div>
+
+  <div class="card">
+    <label>Nada (pitch) <span id="pv">0</span></label>
+    <input type="range" id="pitch" min="-12" max="12" step="1" value="0">
+    <label>Volume <span id="vv">100%</span></label>
+    <input type="range" id="vol" min="0" max="150" step="5" value="100">
+    <p class="tip">Tips: pakai earphone berkabel atau headset, tutup aplikasi lain, dan izinkan akses mikrofon. Kalau tombol Mulai tidak merespons, buka halaman ini langsung di Chrome.</p>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+<script>
+const PRESETS = {
+  normal:  {n:"Normal",        pitch:0,  dist:0,   trem:0,  echo:0},
+  cowok:   {n:"🧔 Suara berat", pitch:-5, dist:0,   trem:0,  echo:0},
+  cewek:   {n:"👩 Cewek natural",pitch:4,  eq:1,   dist:0,   trem:0,  echo:0},
+  cewek2:  {n:"👩‍🦰 Cewek lembut",pitch:3,  eq:0.8, dist:0,   trem:0,  echo:0},
+  cewek3:  {n:"🎀 Cewek imut",   pitch:6,  eq:1,   dist:0,   trem:0,  echo:0},
+  anak:    {n:"🐿️ Anak/Chipmunk",pitch:9, dist:0,   trem:0,  echo:0},
+  monster: {n:"👹 Monster",     pitch:-9, dist:0.4, trem:0,  echo:0},
+  robot:   {n:"🤖 Robot",       pitch:-2, dist:0.15,trem:1,  echo:0},
+  gema:    {n:"🏔️ Gema",        pitch:0,  dist:0,   trem:0,  echo:1},
+  alien:   {n:"👽 Alien",       pitch:7,  dist:0,   trem:1,  echo:0.4}
+};
+
+const $ = id => document.getElementById(id);
+let mic, pitch, dist, trem, echo, gain, meter, hp, low, hi, running = false, raf;
+
+function build(){
+  mic   = new Tone.UserMedia();
+  pitch = new Tone.PitchShift({pitch:0, windowSize:0.06, delayTime:0});
+  dist  = new Tone.Distortion({distortion:0.6, wet:0});
+  trem  = new Tone.Tremolo({frequency:28, depth:1, wet:0}).start();
+  echo  = new Tone.FeedbackDelay({delayTime:0.22, feedback:0.4, wet:0});
+  gain  = new Tone.Gain(1);
+  meter = new Tone.Meter({smoothing:0.6});
+  hp  = new Tone.Filter({type:"highpass", frequency:80, Q:0.7});
+  low = new Tone.Filter({type:"lowshelf", frequency:250, gain:0});
+  hi  = new Tone.Filter({type:"peaking", frequency:3200, Q:0.7, gain:0});
+  mic.chain(hp, pitch, low, hi, dist, trem, echo, gain, Tone.getDestination());
+  gain.connect(meter);
+}
+
+function apply(p){
+  pitch.pitch = p.pitch;
+  dist.wet.value = p.dist;
+  trem.wet.value = p.trem;
+  echo.wet.value = p.echo;
+  const e = p.eq || 0;
+  hp.frequency.value = 80 + 90*e;
+  low.gain.value = -9*e;
+  hi.gain.value = 6*e;
+  $("pitch").value = p.pitch;
+  $("pv").textContent = (p.pitch > 0 ? "+" : "") + p.pitch;
+}
+
+function select(key){
+  document.querySelectorAll(".p").forEach(b => b.classList.toggle("sel", b.dataset.k === key));
+  if (pitch) apply(PRESETS[key]);
+  else { $("pitch").value = PRESETS[key].pitch; $("pv").textContent = (PRESETS[key].pitch>0?"+":"")+PRESETS[key].pitch; }
+  current = key;
+}
+let current = "normal";
+
+Object.entries(PRESETS).forEach(([k,p]) => {
+  const b = document.createElement("button");
+  b.className = "p"; b.dataset.k = k; b.textContent = p.n;
+  b.onclick = () => select(k);
+  $("presets").appendChild(b);
+});
+select("normal");
+
+$("pitch").oninput = e => {
+  const v = +e.target.value;
+  $("pv").textContent = (v>0?"+":"")+v;
+  if (pitch) pitch.pitch = v;
+};
+$("vol").oninput = e => {
+  const v = +e.target.value;
+  $("vv").textContent = v + "%";
+  if (gain) gain.gain.rampTo(v/100, 0.05);
+};
+
+function loop(){
+  if (!running) return;
+  const db = meter.getValue();
+  const lvl = Math.max(0, Math.min(1, (db + 60) / 60));
+  $("bar").style.width = (lvl*100) + "%";
+  raf = requestAnimationFrame(loop);
+}
+
+$("power").onclick = async () => {
+  const btn = $("power"), st = $("status");
+  if (!running) {
+    try {
+      st.textContent = "Meminta izin mikrofon…";
+      await Tone.start();
+      if (!mic) build();
+      await mic.open();
+      apply(PRESETS[current]);
+      pitch.pitch = +$("pitch").value;
+      gain.gain.value = +$("vol").value / 100;
+      running = true;
+      btn.textContent = "■ Berhenti"; btn.classList.add("on");
+      st.textContent = "Aktif — bicara sekarang. Gunakan earphone.";
+      loop();
+    } catch (err) {
+      st.textContent = "Mikrofon tidak bisa diakses. Izinkan mikrofon, atau buka halaman ini langsung di Chrome.";
+    }
+  } else {
+    running = false;
+    cancelAnimationFrame(raf);
+    mic.close();
+    $("bar").style.width = "0";
+    btn.textContent = "▶ Mulai"; btn.classList.remove("on");
+    st.textContent = "Dihentikan.";
+  }
+};
+</script>
+</body>
+</html>
